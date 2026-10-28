@@ -1,0 +1,11 @@
+resource_id,resource_type,rack_id,unit,capacity_limit,safety_threshold
+STO-R1-01,storage,R1,TB,1000,900.0
+STO-R2-01,storage,R2,TB,1000,900.0
+STO-R3-01,storage,R3,TB,1000,900.0
+STO-R4-01,storage,R4,TB,1000,900.0
+PWR-R1-01,power,R1,kW,10,8.5
+PWR-R2-01,power,R2,kW,10,8.5
+TMP-R2-01,thermal,R2,C,32,27.0
+NET-R1-01,network,R1,Gbps,100,80.0
+NET-R3-01,network,R3,Gbps,100,80.0
+VM-R3-01,vm,R3,count,500,475.0

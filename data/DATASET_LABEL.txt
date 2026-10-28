@@ -1,0 +1,1 @@
+SYNTHETIC — deterministically generated telemetry; seed 7; no facility measurements.

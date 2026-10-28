@@ -1,0 +1,8 @@
+date,resource_id,tenant_id,event_type,description
+2026-02-26,STO-R1-01,globex,tenant_onboarding,Globex tenant onboarded
+2026-03-23,PWR-R2-01,initech,workload_change,Initech workload expanded
+2026-07-24,STO-R4-01,globex,policy_change,Retention policy tightened
+2026-07-30,STO-R4-01,globex,capacity_incident,Storage crossed operational threshold
+2026-08-07,NET-R1-01,globex,workload_change,Globex replication workload increased
+2026-09-26,VM-R3-01,globex,tenant_onboarding,Globex VM expansion
+2026-10-12,PWR-R1-01,acme,maintenance,Acme load test
