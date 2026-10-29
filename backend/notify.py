@@ -186,19 +186,19 @@ def _configured_channels(tenant: str | None = None) -> list[NotificationChannel]
     return channels or [ConsoleChannel()]
 
 
-def notification_status(show_topic: bool = True, tenant: str | None = None) -> dict[str, Any]:
+def notification_status(tenant: str | None = None) -> dict[str, Any]:
     enabled = _truthy("NOTIFY_ENABLED", True)
     channels = [channel.name for channel in _configured_channels(tenant)]
     return {
         "enabled": enabled,
         "channels": channels,
+        "ntfy_configured": "ntfy" in channels,
         "min_level": os.getenv("NOTIFY_MIN_LEVEL", "Watch"),
         "interval_minutes": _integer_setting("NOTIFY_INTERVAL_MINUTES", 15, minimum=1),
         "cooldown_hours": _integer_setting("NOTIFY_COOLDOWN_HOURS", 24, minimum=0),
         "dry_run": _truthy("NOTIFY_DRY_RUN", False),
         "last_cycle_at": _RUNTIME["last_cycle_at"],
         "last_result": _RUNTIME["last_result"],
-        "ntfy_topic": os.getenv("NTFY_TOPIC", "") if show_topic and enabled and "ntfy" in channels else "",
         "notice": "There is no authentication; tenant topics are configuration only, not an access-control boundary.",
     }
 
@@ -279,29 +279,142 @@ def _change_key(alert: dict[str, Any]) -> str | None:
     return "|".join(f"{change.get('date')}:{change.get('type')}" for change in changes[-3:])
 
 
-def _alert_body(alert: dict[str, Any], demo: bool = False) -> str:
-    prefix = "DEMO (synthetic data)\n" if demo else ""
-    range_info = alert.get("range") or {}
-    low, high = range_info.get("low_days"), range_info.get("high_days")
-    if low is None and high is None:
-        range_text = "not estimable"
+def _alert_body(alert: dict[str, Any], demo: bool = False, event_type: str | None = None) -> str:
+    if load_dataset().label == "SYNTHETIC":
+        lines = ["SYNTHETIC DATA - advisory only; no facility action is automated."]
+    elif demo:
+        lines = ["DEMO — advisory only; no facility action is automated."]
     else:
-        range_text = f"{low if low is not None else 'open'}–{high if high is not None else 'open'} days"
-    date_text = alert.get("predicted_crossing_date") or "not estimable"
+        lines = ["Advisory only — no facility action is automated."]
+
+    resource_type = _resource_type_label(alert.get("resource_type"))
+    resource = str(alert.get("resource") or "unknown resource")
+    rack = alert.get("rack")
+    location = f", Rack {rack}" if rack else ""
+    unit = str(alert.get("unit") or "")
+    current = alert.get("current_value")
+    capacity = alert.get("capacity_limit")
+    utilization = (
+        float(current) / float(capacity) * 100
+        if current is not None and capacity not in (None, 0)
+        else None
+    )
+    if current is not None and capacity is not None:
+        usage = f"{fmt(current)} {unit} / {fmt(capacity)} {unit}".strip()
+        if utilization is not None:
+            usage += f" ({utilization:.0f}% of capacity)"
+    elif current is not None:
+        usage = f"{fmt(current)} {unit}".strip()
+    else:
+        usage = "current usage unavailable"
+    threshold = alert.get("safety_threshold")
+    if threshold is not None:
+        usage += f"; safety threshold {fmt(threshold)} {unit}".rstrip()
+    lines.append(f"{resource_type} {resource}{location}: {usage}.")
+
+    days = alert.get("lead_time_days")
+    crossing_date = _format_date(alert.get("predicted_crossing_date"))
+    if days is None:
+        estimate = "Time to safety threshold is not reliably estimated"
+        note = alert.get("forecast_note")
+        if note:
+            estimate += f" ({str(note).rstrip('.')})"
+        estimate += "."
+    else:
+        estimate = f"Estimated threshold crossing in about {days} {_plural(days, 'day')}"
+        if crossing_date:
+            estimate += f" (around {crossing_date})"
+        estimate += "."
+    low, high = (alert.get("range") or {}).get("low_days"), (alert.get("range") or {}).get("high_days")
+    if low is not None and high is not None:
+        estimate += f" Forecast range: {low}-{high} days."
+    if alert.get("confidence"):
+        estimate += f" Confidence: {alert['confidence']}."
+    lines.append(estimate)
+
+    event_status = {
+        "new": "New alert",
+        "ongoing": "Ongoing alert reminder",
+        "escalated": "Risk escalated",
+        "step_down": "Forecast timing changed",
+        "regime_change": "Trend changed",
+        "resolved": "Resolved",
+        "digest": "Active alert digest",
+        "possible_spike_unconfirmed": "Unconfirmed spike",
+    }.get(event_type or "", "Alert updated")
+    lines.append(f"Status: {event_status}.")
+
+    reasons = []
+    threshold = alert.get("safety_threshold")
+    if current is not None and threshold is not None and float(current) >= float(threshold):
+        reasons.append("current use has reached the operational safety threshold")
+    growth = alert.get("weekly_growth")
+    if growth is not None and float(growth) > 0:
+        reasons.append(f"recent growth {fmt(growth)} {unit}/week".strip())
+    changes = alert.get("changes") or []
+    if changes:
+        latest = changes[-1]
+        change_date = _format_date(latest.get("date"))
+        reason = str(latest.get("type") or "trend change").replace("_", " ")
+        reasons.append(f"{reason}{f' on {change_date}' if change_date else ''}")
+    event = next(iter(alert.get("related_events") or []), None)
+    if isinstance(event, dict) and event.get("description"):
+        reasons.append(f"related event: {event['description']}")
+    if reasons:
+        lines.append("Reason: " + "; ".join(reasons) + ".")
+    elif alert.get("forecast_note"):
+        lines.append(f"Reason: {str(alert['forecast_note']).rstrip('.')}.")
+
     contributor = alert.get("likely_contributor") or {}
     if contributor.get("tenant"):
-        attribution = f"{contributor['tenant']} (likely contributor; association only, causation not established)"
-    else:
-        attribution = contributor.get("wording", "cause unknown")
-    return (
-        f"{prefix}Advisory only — no action is automated.\n"
-        f"Rack {alert.get('rack', 'unknown')}. Current {fmt(alert.get('current_value'))} / "
-        f"{fmt(alert.get('safety_threshold'))} ({fmt(alert.get('utilisation_pct'))}% of safety threshold).\n"
-        f"Estimated crossing: {date_text}; 95% timing range: {range_text}; "
-        f"confidence: {alert.get('confidence') or 'not available'}.\n"
-        f"Likely contributor: {attribution}.\n"
-        f"Recommendation (advisory): {alert.get('recommended_action') or 'Review the trend and available headroom.'}"
-    )
+        lines.append(
+            f"Associated workload: {contributor['tenant']} (association only; causation not established)."
+        )
+    elif contributor.get("wording") and contributor["wording"] != "cause unknown":
+        lines.append(f"Attribution: {contributor['wording']}.")
+
+    action = alert.get("recommended_action")
+    if action:
+        lines.append(f"Recommended action: {str(action).rstrip('.')}.")
+    assessed = _format_assessment(alert.get("assessment_timestamp")) or _format_date(alert.get("assessment_date"))
+    if assessed:
+        lines.append(f"Assessed: {assessed}.")
+    return "\n".join(lines)
+
+
+def _plural(value: int, singular: str) -> str:
+    return singular if value == 1 else f"{singular}s"
+
+
+def _format_date(value: Any) -> str | None:
+    if not value or value == "not estimable":
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%b %d, %Y")
+    except ValueError:
+        return None
+
+
+def _format_assessment(value: Any) -> str | None:
+    if not value:
+        return None
+    try:
+        assessed_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if assessed_at.tzinfo is None:
+        assessed_at = assessed_at.replace(tzinfo=timezone.utc)
+    return assessed_at.astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
+
+
+def _resource_type_label(value: Any) -> str:
+    return {
+        "storage": "Storage",
+        "network": "Network",
+        "power": "Power",
+        "thermal": "Cooling/Temperature",
+        "vm": "VM",
+    }.get(str(value or "").lower(), str(value or "Capacity").title())
 
 
 def fmt(value: Any) -> str:
@@ -316,19 +429,72 @@ def _make_message(alert: dict[str, Any], event_type: str, tenant: str | None,
                   demo: bool = False) -> Notification:
     risk = alert.get("risk_level", "Watch")
     resource = str(alert.get("resource", "unknown"))
+    resource_type = _resource_type_label(alert.get("resource_type"))
+    rack = alert.get("rack")
+    location = f" - Rack {rack}" if rack else ""
     days = alert.get("lead_time_days")
-    days_text = f"~{days} days to threshold" if days is not None else "date not estimated"
     prefix = "[SYNTHETIC] " if load_dataset().label == "SYNTHETIC" else ""
     demo_prefix = "[DEMO] " if demo else ""
-    title = f"{prefix}{demo_prefix}[{risk}] {resource} - {days_text}"
+    if event_type == "resolved":
+        title_status = "RESOLVED Capacity Alert"
+    elif event_type == "possible_spike_unconfirmed":
+        title_status = "UNCERTAIN Capacity Signal"
+    else:
+        severity = {"Critical": "CRITICAL", "High Risk": "HIGH RISK", "Watch": "WATCH"}.get(
+            str(risk), str(risk).upper()
+        )
+        title_status = f"{severity} Capacity Risk"
+    title = f"{prefix}{demo_prefix}{title_status}: {resource_type}{location}"
     dashboard = os.getenv("DASHBOARD_URL", "http://localhost:5173").rstrip("/")
-    click = f"{dashboard}/?resource={urllib.parse.quote(resource)}"
+    query = {
+        "resource": resource,
+        "alert_id": _alert_id(resource, tenant or "all"),
+        "event": event_type,
+        "fingerprint": _fingerprint(alert),
+    }
     if tenant:
-        click += f"&tenant={urllib.parse.quote(tenant)}"
+        query["tenant"] = tenant
+    click = f"{dashboard}/?{urllib.parse.urlencode(query)}"
     return Notification(
-        resource, tenant or "all", risk, days, event_type, title, _alert_body(alert, demo),
+        resource, tenant or "all", risk, days, event_type, title, _alert_body(alert, demo, event_type),
         {"Critical": "urgent", "High Risk": "high", "Watch": "default"}.get(risk, "low"),
         "warning", click, _fingerprint(alert),
+    )
+
+
+def _alert_id(resource: str, scope: str) -> str:
+    return hashlib.sha256(f"{scope}:{resource}".encode("utf-8")).hexdigest()[:16]
+
+
+def _digest_line(alert: dict[str, Any]) -> str:
+    resource_type = _resource_type_label(alert.get("resource_type"))
+    rack = f", Rack {alert['rack']}" if alert.get("rack") else ""
+    unit = str(alert.get("unit") or "")
+    current, capacity, threshold = (
+        alert.get("current_value"),
+        alert.get("capacity_limit"),
+        alert.get("safety_threshold"),
+    )
+    usage = f"{fmt(current)} {unit}".strip() if current is not None else "usage unavailable"
+    if current is not None and capacity is not None:
+        usage += f" / {fmt(capacity)} {unit}".rstrip()
+        if float(capacity):
+            usage += f" ({float(current) / float(capacity) * 100:.0f}%)"
+    if threshold is not None:
+        usage += f"; safety threshold {fmt(threshold)} {unit}".rstrip()
+    days = alert.get("lead_time_days")
+    if days is None:
+        estimate = "time not estimated"
+    else:
+        estimate = f"~{days} {_plural(days, 'day')}"
+        date_text = _format_date(alert.get("predicted_crossing_date"))
+        if date_text:
+            estimate += f", {date_text}"
+    growth = alert.get("weekly_growth")
+    reason = f"; growth {fmt(growth)} {unit}/week" if growth is not None and float(growth) > 0 else ""
+    return (
+        f"- {str(alert.get('risk_level', 'Watch')).upper()} {resource_type} "
+        f"{alert.get('resource', 'unknown')}{rack}: {usage}; {estimate}{reason}."
     )
 
 
@@ -387,7 +553,7 @@ def _decision(alert: dict[str, Any], previous: sqlite3.Row | None,
     if (new_change and new_change != old_change and old_days is not None and new_days is not None
             and abs(old_days - new_days) >= max(7, old_days * .2)):
         return "regime_change"
-    return "new"
+    return "ongoing"
 
 
 def _dispatch_one(message: Notification, channels: list[NotificationChannel],
@@ -485,9 +651,7 @@ def dispatch(
             digest_items = eligible[:5]
             body_lines = ["Advisory-only capacity changes:"]
             for alert, event_type, _, _ in digest_items:
-                body_lines.append(f"- [{alert.get('risk_level')}] {alert.get('resource')}: "
-                                  f"{alert.get('lead_time_days') if alert.get('lead_time_days') is not None else 'date not estimated'} days; "
-                                  f"{alert.get('predicted_crossing_date') or 'crossing not estimated'}.")
+                body_lines.append(_digest_line(alert))
             body_lines.append("Open the dashboard for evidence and recommendations.")
             if demo:
                 body_lines.insert(0, "DEMO (synthetic data)")
@@ -615,6 +779,7 @@ def run_notification_cycle(
 
 
 async def notification_loop() -> None:
+    await asyncio.sleep(1)
     while True:
         await asyncio.to_thread(run_notification_cycle)
         await asyncio.sleep(_integer_setting("NOTIFY_INTERVAL_MINUTES", 15, minimum=1) * 60)

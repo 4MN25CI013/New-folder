@@ -5,6 +5,7 @@ import AlertCentre from "./components/AlertCentre.jsx";
 import Inventory from "./components/Inventory.jsx";
 import ResourceDetail from "./components/ResourceDetail.jsx";
 import Notifications from "./components/Notifications.jsx";
+import MobileStorageCard from "./components/MobileStorageCard.jsx";
 import "./notifications.css";
 
 export default function App() {
@@ -54,6 +55,7 @@ export default function App() {
       <div className="topbar-actions">
         <nav className="page-nav" aria-label="Dashboard sections">
           <button className={activePage === "dashboard" ? "active" : ""} onClick={() => setActivePage("dashboard")}>Overview</button>
+          <button className={activePage === "mobile" ? "active" : ""} onClick={() => setActivePage("mobile")}>📱 Mobile Storage</button>
           <button className={activePage === "notifications" ? "active" : ""} onClick={() => setActivePage("notifications")}>Notifications</button>
         </nav>
         <div className="viewer"><label htmlFor="tenant-select">Viewing as</label><select id="tenant-select" value={tenant} onChange={e => { setSelected(""); setTenant(e.target.value); }}>
@@ -67,7 +69,8 @@ export default function App() {
     </section>
     {error && <div className="error-banner" role="alert"><b>Unable to load dashboard:</b> {error} <button onClick={refresh}>Retry</button></div>}
     <DatasetBanner dataset={dataset} />
-    {activePage === "notifications" ? <Notifications tenant={tenant} /> : <>
+    {activePage === "notifications" ? <Notifications tenant={tenant} /> : activePage === "mobile" ? <MobileStorageCard /> : <>
+      <MobileStorageCard />
       {loading && !summary ? <div className="loading large">Loading capacity outlook…</div> : <Cards summary={summary} />}
       {loading && <div className="loading-inline">Refreshing tenant-scoped data…</div>}
       <AlertCentre alerts={alerts} onSelect={setSelected} />

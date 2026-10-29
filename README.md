@@ -120,6 +120,12 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 
 When `frontend/dist` exists, FastAPI serves the built UI at `http://localhost:8000/`. CORS is restricted to `http://localhost:5173` and `http://localhost:8000`.
 
+### Publish a demo on Render
+
+The repository includes a Render Blueprint (`render.yaml`) and a Dockerfile that build and serve the frontend and API together. Push the project to a GitHub repository, create a new Blueprint on Render, and connect that repository. Render builds the service and provides its public URL when deployment succeeds. The free instance may take a short time to wake after inactivity.
+
+This is a public, unauthenticated demo and is **not production-secure**. Deploy only the supplied synthetic data; do not expose real tenant data or share the public link with untrusted users.
+
 ## API
 
 All application endpoints are GET-only. POST/PUT/DELETE requests to these paths return 405.
@@ -164,6 +170,12 @@ All recommendations are advisory. The app contains no control-plane integration 
 ## Mobile notifications
 
 The backend periodically evaluates the same forecast and alert logic used by the dashboard. It sends one digest for a batch, and individual messages for Critical resources. New Watch/High Risk/Critical alerts, escalations, 30/14/7-day lead-time crossings and materially changed recent regimes can notify. Unconfirmed spikes are suppressed by default. Repeats respect the configured cooldown; optional recovery messages can be enabled with `NOTIFY_SEND_RESOLVED=true`.
+
+### Email alerts with Gmail
+
+For local development, copy `.env.example` to `.env` and set `NOTIFY_CHANNELS=email`, `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USER` to your Gmail address, `SMTP_PASSWORD` to a Google App Password, and `EMAIL_TO` to the recipient address. A Google App Password requires 2-Step Verification; do not use your regular Gmail password. Keep `.env` private and never commit or paste the app password into chat.
+
+For Render, add the same settings in the service's **Environment** page instead of uploading a `.env` file. Set `DASHBOARD_URL` to the deployed site URL, save, and redeploy. After configuration, run `python -m backend.notify --test` locally to send one labelled test email. The Render-hosted service sends its own test only if its CLI is run there; the dashboard does not expose a test-send action.
 
 ### ntfy on Android or iOS
 

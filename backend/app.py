@@ -14,10 +14,17 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 from backend.data import DATA_DIR, Dataset, load_dataset, resource_series
 from backend.engine import ENGINE_VERSION, forecast
 from backend.validate import run_validation
+from backend.mobile import (
+    get_connected_mobile_storage,
+    trigger_mobile_popup,
+    get_modal_html,
+    get_adb_path,
+)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -41,8 +48,8 @@ app = FastAPI(title="Capacity Intelligence", description=(
 ), lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:8000"],
-    allow_methods=["GET"],
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -208,9 +215,17 @@ def _alert(resource_id: str, output: dict[str, Any]) -> dict[str, Any]:
     evidence.extend(f"Detected {change['type']} on {change['date']}." for change in changes[-3:])
     lead = output.get("days_remaining")
     return {
-        "resource": resource["resource_id"], "rack": resource["rack_id"], "risk_level": output["status"],
+        "resource": resource["resource_id"], "resource_type": resource["resource_type"],
+        "unit": resource["unit"], "capacity_limit": resource["capacity_limit"],
+        "rack": resource["rack_id"], "risk_level": output["status"],
         "alert_type": alert_type, "predicted_crossing_date": output.get("crossing_date") or "not estimable",
         "lead_time_days": lead, "range": output.get("range"), "confidence": output.get("confidence"),
+        "current_value": output.get("current_value"), "safety_threshold": resource["safety_threshold"],
+        "utilisation_pct": output.get("utilisation_pct"), "weekly_growth": output.get("weekly_growth"),
+        "assessment_date": output.get("as_of"),
+        "assessment_timestamp": datetime.now(timezone.utc).isoformat(),
+        "forecast_note": output.get("note"),
+        "changes": changes,
         "evidence": evidence, "related_events": output.get("events", []),
         "likely_contributor": contributor, "recommended_action": _recommendation(resource["resource_type"]),
     }
@@ -368,7 +383,7 @@ def notifications_status(tenant: str | None = None) -> dict[str, Any]:
     _tenant_dataset(tenant)
     from backend.notify import notification_status
 
-    return notification_status(show_topic=tenant is None, tenant=tenant)
+    return notification_status(tenant=tenant)
 
 
 @app.get("/api/notifications")
@@ -380,6 +395,35 @@ def notifications(tenant: str | None = None, limit: int = Query(100, ge=1, le=50
     from backend.notify import notification_history
 
     return {"items": notification_history(tenant=tenant, limit=limit, resource_id=resource_id)}
+
+
+@app.get("/api/mobile/status")
+def mobile_status() -> dict[str, Any]:
+    return get_connected_mobile_storage()
+
+
+@app.post("/api/mobile/trigger-alert")
+def mobile_trigger() -> dict[str, Any]:
+    return trigger_mobile_popup()
+
+
+@app.get("/api/mobile/modal", response_class=HTMLResponse)
+def mobile_modal() -> HTMLResponse:
+    data = get_connected_mobile_storage()
+    return HTMLResponse(content=get_modal_html(data), status_code=200)
+
+
+@app.get("/api/mobile/open-storage", response_class=HTMLResponse)
+def mobile_open_storage() -> HTMLResponse:
+    adb = get_adb_path()
+    if adb:
+        import subprocess
+        subprocess.run([adb, "shell", "am", "start", "-a", "android.settings.INTERNAL_STORAGE_SETTINGS"], capture_output=True)
+    return HTMLResponse(
+        content="<html><body style='background:#111;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;'>"
+        "<script>window.close();</script><h3>Opening Storage Settings...</h3></body></html>",
+        status_code=200,
+    )
 
 
 dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"

@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI Backend",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "backend.app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "jinja": true,
+            "justMyCode": true
+        },
+        {
+            "type": "chrome",
+            "request": "launch",
+            "name": "Launch Chrome against Frontend",
+            "url": "http://localhost:5173",
+            "webRoot": "${workspaceFolder}/frontend"
+        }
+    ]
+}
